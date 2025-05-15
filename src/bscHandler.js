@@ -147,47 +147,26 @@ class BSCHandler extends EventEmitter {
     this.magBridge = new this.web3.eth.Contract(MAGBridgeABI, config.bsc.magBridgeAddress);
   }
   
-  // 初始化监听器
+  /**
+   * 启动BSC链监听
+   */
   async start() {
-    console.log('启动BSC链监听...');
-    
     try {
-      // 测试连接
-      const blockNumber = await this.web3.eth.getBlockNumber();
-      console.log(`当前BSC链区块高度: ${blockNumber}`);
+      console.log('启动BSC链监听...');
       
-      // 监听跨链提款事件
-      this.listenForWithdrawEvents();
+      // 获取当前区块号
+      const currentBlock = await this.web3.eth.getBlockNumber();
+      console.log(`当前BSC链区块高度: ${currentBlock}`);
       
-      // 启动区块轮询检查提款事件（备用方法）
-      this.startBlockPolling(blockNumber);
+      // 不再使用事件订阅，完全依赖区块轮询
+      // 启动区块轮询
+      this.startBlockPolling(currentBlock);
       
       console.log('BSC链监听服务已成功启动');
       return true;
     } catch (error) {
       console.error('启动BSC链监听服务失败:', error);
-      return false;
-    }
-  }
-  
-  // 使用事件监听提款
-  listenForWithdrawEvents() {
-    try {
-      this.magBridge.events.CrossChainWithdraw({}, (error, event) => {
-        if (error) {
-          console.error('监听CrossChainWithdraw事件错误:', error);
-          return;
-        }
-        
-        // 处理提款事件
-        this.handleWithdrawEvent(event);
-      });
-      
-      console.log('正在监听CrossChainWithdraw事件...');
-    } catch (error) {
-      console.error('设置提款事件监听失败:', error);
-      // 回退到轮询模式
-      console.log('将使用区块轮询方式监听提款事件');
+      throw error;
     }
   }
   
@@ -435,13 +414,10 @@ class BSCHandler extends EventEmitter {
   
   // 获取与我们合约相关的交易收据
   async getContractTransactionReceipts(blockNumber) {
-    // 获取区块哈希
-    const blockHash = await this.web3.eth.getBlockHash(blockNumber);
-    if (!blockHash) return [];
-    
     try {
-      // 使用低级RPC方法获取区块中的交易哈希
-      const block = await this.web3.eth.getBlock(blockHash, false);
+      // 直接获取区块
+      const block = await this.web3.eth.getBlock(blockNumber, false);
+      if (!block || !block.hash) return [];
       if (!block || !block.transactions || block.transactions.length === 0) return [];
       
       const receipts = [];
