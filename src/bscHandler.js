@@ -376,70 +376,142 @@ class BSCHandler extends EventEmitter {
   
   // 区块轮询（备用方法）
   async startBlockPolling(startBlock) {
-    let lastCheckedBlock = startBlock;
+    // 存储最后检查的区块号
+    this.lastCheckedBlock = startBlock || await this.web3.eth.getBlockNumber() - 10;
+    console.log(`从BSC区块 ${this.lastCheckedBlock} 开始轮询`);
     
+    // 创建事件主题哈希，用于后续匹配
+    this.withdrawEventTopic = this.web3.utils.sha3('CrossChainWithdraw(address,string,uint256)');
+    this.transferEventTopic = this.web3.utils.sha3('CrossChainTransfer(address,address,uint256,uint256,bytes32,string)');
+    
+    // 开始定时轮询
     setInterval(async () => {
       try {
         const currentBlock = await this.web3.eth.getBlockNumber();
         
-        if (currentBlock > lastCheckedBlock) {
-          console.log(`检查BSC区块 ${lastCheckedBlock + 1} 到 ${currentBlock} 的事件`);
+        if (currentBlock > this.lastCheckedBlock) {
+          // 计算要处理的区块范围，一次最多处理30个区块
+          const fromBlock = this.lastCheckedBlock + 1;
+          const toBlock = Math.min(currentBlock, fromBlock + 29);
+          console.log(`检查BSC区块 ${fromBlock} 到 ${toBlock} 的事件`);
           
-          // 获取提款事件
-          const withdrawEvents = await this.magBridge.getPastEvents('CrossChainWithdraw', {
-            fromBlock: lastCheckedBlock + 1,
-            toBlock: currentBlock
-          });
-          
-          // 处理每个提款事件
-          for (const event of withdrawEvents) {
-            this.handleWithdrawEvent(event);
-          }
-          
-          // 获取跨链转账事件
-          const transferEvents = await this.magBridge.getPastEvents('CrossChainTransfer', {
-            fromBlock: lastCheckedBlock + 1,
-            toBlock: currentBlock
-          });
-          
-          // 记录成功的跨链转账
-          for (const event of transferEvents) {
-            const { from, to, amount, fee, txHash, status } = event.returnValues;
-            console.log(`跨链转账: ${from} -> ${to}, 金额: ${this.web3.utils.fromWei(amount)}, 状态: ${status}`);
-            
-            if (status === 'success') {
-              // 将成功的交易记录到数据库
-              const magnetTxHash = this.web3.utils.toHex(txHash).replace('0x', '');
-              db.addProcessedDeposit({
-                magTxHash: magnetTxHash,
-                bscTxHash: event.transactionHash,
-                amount: amount,
-                fee: fee,
-                recipient: to,
-                status: status,
-                timestamp: Math.floor(Date.now() / 1000)
-              });
+          // 逐个处理区块
+          for (let blockNumber = fromBlock; blockNumber <= toBlock; blockNumber++) {
+            try {
+              // 获取区块详情，包括交易
+              const block = await this.web3.eth.getBlock(blockNumber, true);
+              
+              if (block && block.transactions && block.transactions.length > 0) {
+                await this.processBlockTransactions(block);
+              }
+            } catch (blockError) {
+              console.error(`处理区块 ${blockNumber} 时出错:`, blockError);
             }
           }
           
-          // 获取费用收取事件
-          const feeEvents = await this.magBridge.getPastEvents('FeeCollected', {
-            fromBlock: lastCheckedBlock + 1,
-            toBlock: currentBlock
-          });
-          
-          // 记录费用收取信息
-          for (const event of feeEvents) {
-            const { from, amount, fee, txHash, operationType } = event.returnValues;
-            console.log(`费用收取: 地址 ${from}, 金额: ${this.web3.utils.fromWei(fee)}, 操作类型: ${operationType}`);
-          }
-          
-          lastCheckedBlock = currentBlock;
+          // 更新最后检查的区块
+          this.lastCheckedBlock = toBlock;
         }
       } catch (error) {
         console.error('BSC区块轮询错误:', error);
       }
     }, 15000); // 每15秒检查一次
+  }
+  
+  
+  // 处理区块中的交易
+  async processBlockTransactions(block) {
+    // 遍历区块中的所有交易
+    for (const tx of block.transactions) {
+      // 检查交易是否与我们的合约相关
+      if (tx.to && tx.to.toLowerCase() === this.magBridge.options.address.toLowerCase()) {
+        try {
+          // 获取交易收据，其中包含日志（事件）
+          const receipt = await this.web3.eth.getTransactionReceipt(tx.hash);
+          
+          if (receipt && receipt.logs) {
+            // 遍历所有日志，查找我们感兴趣的事件
+            for (const log of receipt.logs) {
+              if (log.address.toLowerCase() === this.magBridge.options.address.toLowerCase()) {
+                // 检查是否为提款事件
+                if (log.topics[0] === this.withdrawEventTopic) {
+                  await this.processWithdrawEventLog(log, receipt, block.timestamp);
+                }
+                // 检查是否为转账事件
+                else if (log.topics[0] === this.transferEventTopic) {
+                  await this.processTransferEventLog(log, receipt, block.timestamp);
+                }
+              }
+            }
+          }
+        } catch (txError) {
+          console.error(`处理交易 ${tx.hash} 时出错:`, txError);
+        }
+      }
+    }
+  }
+  
+  // 处理提款事件日志
+  async processWithdrawEventLog(log, receipt, timestamp) {
+    try {
+      // 解码日志数据
+      const sender = this.web3.eth.abi.decodeParameter('address', log.topics[1]);
+      const data = this.web3.eth.abi.decodeParameters(['string', 'uint256'], log.data);
+      const magnetAddress = data[0];
+      const amount = data[1];
+      
+      // 构造事件对象，类似于web3.js的事件格式
+      const event = {
+        returnValues: {
+          sender: sender,
+          magnetAddress: magnetAddress,
+          amount: amount
+        },
+        transactionHash: receipt.transactionHash,
+        blockNumber: receipt.blockNumber
+      };
+      
+      // 调用原有的事件处理函数
+      await this.handleWithdrawEvent(event);
+    } catch (error) {
+      console.error('处理提款事件日志出错:', error);
+    }
+  }
+  
+  // 处理转账事件日志
+  async processTransferEventLog(log, receipt, timestamp) {
+    try {
+      // 解码日志数据
+      const data = this.web3.eth.abi.decodeParameters(
+        ['address', 'address', 'uint256', 'uint256', 'bytes32', 'string'],
+        log.data
+      );
+      
+      const from = data[0];
+      const to = data[1];
+      const amount = data[2];
+      const fee = data[3];
+      const txHash = data[4];
+      const status = data[5];
+      
+      console.log(`跨链转账: ${from} -> ${to}, 金额: ${this.web3.utils.fromWei(amount)}, 状态: ${status}`);
+      
+      if (status === 'success') {
+        // 将成功的交易记录到数据库
+        const magnetTxHash = this.web3.utils.toHex(txHash).replace('0x', '');
+        db.addProcessedDeposit({
+          magTxHash: magnetTxHash,
+          bscTxHash: receipt.transactionHash,
+          amount: amount,
+          fee: fee,
+          recipient: to,
+          status: status,
+          timestamp: Math.floor(timestamp || Date.now() / 1000)
+        });
+      }
+    } catch (error) {
+      console.error('处理转账事件日志出错:', error);
+    }
   }
   
   // 获取桥接状态信息
