@@ -528,9 +528,10 @@ class BSCHandler extends EventEmitter {
   // 获取桥接状态信息
   async getBridgeStatus() {
     try {
-      const [feePercentage, maxAmount, dailyLimit, dailyTotal, isPaused] = await Promise.all([
+      const [feePercentage, maxAmount, minAmount, dailyLimit, dailyTotal, isPaused] = await Promise.all([
         this.magBridge.methods.feePercentage().call(),
         this.magBridge.methods.maxTransactionAmount().call(),
+        this.magBridge.methods.minTransactionAmount().call(),
         this.magBridge.methods.dailyTransactionLimit().call(),
         this.magBridge.methods.dailyTransactionTotal().call(),
         this.magBridge.methods.paused().call()
@@ -539,6 +540,7 @@ class BSCHandler extends EventEmitter {
       return {
         feeRate: `${feePercentage / 100}%`,
         maxSingleTransaction: this.web3.utils.fromWei(maxAmount),
+        minSingleTransaction: this.web3.utils.fromWei(minAmount),
         dailyLimit: this.web3.utils.fromWei(dailyLimit),
         dailyUsed: this.web3.utils.fromWei(dailyTotal),
         bridgeStatus: isPaused ? "暂停中" : "运行中"
