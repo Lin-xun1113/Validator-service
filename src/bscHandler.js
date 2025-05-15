@@ -390,19 +390,33 @@ class BSCHandler extends EventEmitter {
         const currentBlock = await this.web3.eth.getBlockNumber();
         
         if (currentBlock > this.lastCheckedBlock) {
-          // 计算要处理的区块范围，一次最多处理30个区块
+          // 计算要处理的区块范围，一次最多处理5个区块(以减少负荷)
           const fromBlock = this.lastCheckedBlock + 1;
-          const toBlock = Math.min(currentBlock, fromBlock + 29);
+          const toBlock = Math.min(currentBlock, fromBlock + 4);
           console.log(`检查BSC区块 ${fromBlock} 到 ${toBlock} 的事件`);
           
           // 逐个处理区块
           for (let blockNumber = fromBlock; blockNumber <= toBlock; blockNumber++) {
             try {
-              // 获取区块详情，包括交易
-              const block = await this.web3.eth.getBlock(blockNumber, true);
+              // 使用轻量级方式获取区块信息，不包含详细交易
+              const blockHeader = await this.web3.eth.getBlock(blockNumber, false);
               
-              if (block && block.transactions && block.transactions.length > 0) {
-                await this.processBlockTransactions(block);
+              if (!blockHeader) {
+                console.log(`区块 ${blockNumber} 不存在或没有被知同`);
+                continue;
+              }
+              
+              // 获取与我们合约相关的交易收据(按合约地址过滤)
+              try {
+                const receipts = await this.getContractTransactionReceipts(blockNumber);
+                
+                if (receipts && receipts.length > 0) {
+                  for (const receipt of receipts) {
+                    await this.processTransactionReceipt(receipt, blockHeader.timestamp);
+                  }
+                }
+              } catch (receiptsError) {
+                console.error(`获取区块 ${blockNumber} 收据时出错:`, receiptsError);
               }
             } catch (blockError) {
               console.error(`处理区块 ${blockNumber} 时出错:`, blockError);
@@ -419,33 +433,54 @@ class BSCHandler extends EventEmitter {
   }
   
   
-  // 处理区块中的交易
-  async processBlockTransactions(block) {
-    // 遍历区块中的所有交易
-    for (const tx of block.transactions) {
-      // 检查交易是否与我们的合约相关
-      if (tx.to && tx.to.toLowerCase() === this.magBridge.options.address.toLowerCase()) {
+  // 获取与我们合约相关的交易收据
+  async getContractTransactionReceipts(blockNumber) {
+    // 获取区块哈希
+    const blockHash = await this.web3.eth.getBlockHash(blockNumber);
+    if (!blockHash) return [];
+    
+    try {
+      // 使用低级RPC方法获取区块中的交易哈希
+      const block = await this.web3.eth.getBlock(blockHash, false);
+      if (!block || !block.transactions || block.transactions.length === 0) return [];
+      
+      const receipts = [];
+      
+      // 对每个交易哈希获取收据
+      for (const txHash of block.transactions) {
         try {
-          // 获取交易收据，其中包含日志（事件）
-          const receipt = await this.web3.eth.getTransactionReceipt(tx.hash);
+          const receipt = await this.web3.eth.getTransactionReceipt(txHash);
           
-          if (receipt && receipt.logs) {
-            // 遍历所有日志，查找我们感兴趣的事件
-            for (const log of receipt.logs) {
-              if (log.address.toLowerCase() === this.magBridge.options.address.toLowerCase()) {
-                // 检查是否为提款事件
-                if (log.topics[0] === this.withdrawEventTopic) {
-                  await this.processWithdrawEventLog(log, receipt, block.timestamp);
-                }
-                // 检查是否为转账事件
-                else if (log.topics[0] === this.transferEventTopic) {
-                  await this.processTransferEventLog(log, receipt, block.timestamp);
-                }
-              }
-            }
+          // 只处理与我们合约相关的交易
+          if (receipt && receipt.to && receipt.to.toLowerCase() === this.magBridge.options.address.toLowerCase()) {
+            receipts.push(receipt);
           }
-        } catch (txError) {
-          console.error(`处理交易 ${tx.hash} 时出错:`, txError);
+        } catch (error) {
+          console.error(`获取交易收据出错 ${txHash}:`, error);
+        }
+      }
+      
+      return receipts;
+    } catch (error) {
+      console.error(`获取区块 ${blockNumber} 交易出错:`, error);
+      return [];
+    }
+  }
+  
+  // 处理交易收据
+  async processTransactionReceipt(receipt, blockTimestamp) {
+    if (!receipt || !receipt.logs) return;
+    
+    // 遍历所有日志，查找我们感兴趣的事件
+    for (const log of receipt.logs) {
+      if (log.address.toLowerCase() === this.magBridge.options.address.toLowerCase()) {
+        // 检查是否为提款事件
+        if (log.topics[0] === this.withdrawEventTopic) {
+          await this.processWithdrawEventLog(log, receipt, blockTimestamp);
+        }
+        // 检查是否为转账事件
+        else if (log.topics[0] === this.transferEventTopic) {
+          await this.processTransferEventLog(log, receipt, blockTimestamp);
         }
       }
     }
@@ -468,7 +503,7 @@ class BSCHandler extends EventEmitter {
           amount: amount
         },
         transactionHash: receipt.transactionHash,
-        blockNumber: receipt.blockNumber
+        blockNumber: receipt.blockNumber ? receipt.blockNumber.toString() : '0'
       };
       
       // 调用原有的事件处理函数
