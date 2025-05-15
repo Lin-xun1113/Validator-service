@@ -10,7 +10,7 @@ module.exports = {
     rpc: process.env.MAGNET_RPC_URL || 'https://node1.magnetchain.xyz',
     chainId: 114514,  // Magnet POW链 ID
     // 多签钱包地址（同时作为存款地址和提款处理地址）
-    multiSigAddress: process.env.MAGNET_MULTISIG_ADDRESS || '0xd95fc74a2a6C7ea18B4C0eEfb3592E6B9c5a552D',
+    multiSigAddress: process.env.MAGNET_MULTISIG_ADDRESS || '0xaC1F64cE7c768B5F6C19A352Bf9Cf313A26528D4',
     // 将多签地址作为存款地址使用
     get depositAddress() { return this.multiSigAddress; },
     // 验证者私钥
