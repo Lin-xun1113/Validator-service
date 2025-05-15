@@ -64,6 +64,16 @@ const MAGBridgeABI = [
     "stateMutability": "view",
     "type": "function"
   },
+  // 最小交易额
+  {
+    "inputs": [],
+    "name": "minTransactionAmount",
+    "outputs": [
+      { "internalType": "uint256", "name": "", "type": "uint256" }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
   // 每日交易限额
   {
     "inputs": [],
