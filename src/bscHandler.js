@@ -425,8 +425,8 @@ class BSCHandler extends EventEmitter {
    */
   async processHistoricalBlocks(fromBlock, toBlock) {
     try {
-      // 分批处理，每批大幅减小到10个区块，以防止速率限制
-      const batchSize = 10;
+      // 分批处理，每批大幅减小到30个区块，以防止速率限制
+      const batchSize = 30;
       let processedCount = 0;
       
       for (let start = fromBlock; start <= toBlock; start += batchSize) {
