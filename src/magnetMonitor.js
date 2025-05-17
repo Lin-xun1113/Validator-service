@@ -146,6 +146,13 @@ class MagnetMonitor extends EventEmitter {
         // 显示时转换为可读格式
         const readableWalletBalance = this.web3.utils.fromWei(walletBalance, 'ether');
         console.error(`多签钱包余额不足: ${readableWalletBalance} MAG < ${readableAmount} MAG`);
+        
+        // 将提款请求标记为失败，避免无限重试
+        db.updateWithdrawalStatus(withdrawal.txHash, 'failed', null, {
+          failureReason: `多签钱包余额不足: ${readableWalletBalance} MAG < ${readableAmount} MAG`,
+          timestamp: Math.floor(Date.now() / 1000)
+        });
+        
         return false;
       }
       
@@ -245,7 +252,7 @@ class MagnetMonitor extends EventEmitter {
             
             return true;
           } catch (execError) {
-            // 如果执行失败，可能是其他验证者已执行
+            // 执行交易失败，检查具体原因
             console.error(`执行交易失败: ${execError.message}`);
             
             // 尝试再次查询交易状态
@@ -257,7 +264,21 @@ class MagnetMonitor extends EventEmitter {
               return true;
             }
             
-            // 其他执行失败原因
+            // 检查是否为余额不足错误
+            let failureReason = execError.message;
+            if (execError.receipt && execError.receipt.status === false) {
+              console.error(`交易失败，链上返回状态为false: ${JSON.stringify(execError.receipt)}`);
+              failureReason = '链上交易执行失败，可能是多签钱包余额不足';
+            }
+            
+            // 将提款请求标记为失败，避免重复处理
+            console.log(`标记提款 ${withdrawal.txHash} 为失败，原因: ${failureReason}`);
+            db.updateWithdrawalStatus(withdrawal.txHash, 'failed', null, {
+              failureReason: failureReason,
+              multiSigTxId: txId,
+              failedAt: Math.floor(Date.now() / 1000)
+            });
+            
             return false;
           }
         }

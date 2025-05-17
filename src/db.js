@@ -153,8 +153,8 @@ class TransactionDB {
         };
       }
       
-      // 如果状态为'completed'，移至已处理列表
-      if (status === 'completed') {
+      // 如果状态为'completed'或'failed'，移至已处理列表
+      if (status === 'completed' || status === 'failed') {
         const withdrawal = this.pendingWithdrawals[pendingIndex];
         this.addProcessedWithdrawal({
           bscTxHash: withdrawal.txHash,
@@ -163,9 +163,10 @@ class TransactionDB {
           destinationAddress: withdrawal.destinationAddress,
           amount: withdrawal.amount,
           fee: withdrawal.fee,
-          status: 'success',
+          status: status === 'completed' ? 'success' : 'failed',
           timestamp: Math.floor(Date.now() / 1000),
-          multiSigInfo: withdrawal.multiSigInfo || extraInfo || {}
+          multiSigInfo: withdrawal.multiSigInfo || extraInfo || {},
+          failureReason: extraInfo.failureReason || ''
         });
       } else {
         this.save();
