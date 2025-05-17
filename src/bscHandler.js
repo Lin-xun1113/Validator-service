@@ -64,6 +64,16 @@ const MAGBridgeABI = [
     "stateMutability": "view",
     "type": "function"
   },
+  // 最小交易限额
+  {
+    "inputs": [],
+    "name": "minTransactionAmount",
+    "outputs": [
+      { "internalType": "uint256", "name": "", "type": "uint256" }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
   // 每日交易限额
   {
     "inputs": [],
@@ -150,9 +160,9 @@ class BSCHandler extends EventEmitter {
   /**
    * 启动BSC链监听
    * @param {boolean} scanPastBlocks - 是否扫描过去的区块，默认为true
-   * @param {number} blocksToScan - 要扫描的过去区块数，默认为1000
+   * @param {number} blocksToScan - 要扫描的过去区块数，默认为100
    */
-  async start(scanPastBlocks = true, blocksToScan = 1000) {
+  async start(scanPastBlocks = true, blocksToScan = 100) {
     try {
       console.log('启动BSC链监听...');
       
@@ -445,8 +455,8 @@ class BSCHandler extends EventEmitter {
         // 更新最后检查的区块
         this.lastCheckedBlock = end;
         
-        // 每批区块处理完成后等待0.01秒，避免API请求过于频繁
-        await new Promise(resolve => setTimeout(resolve, 10));
+        // 每批区块处理完成后等待500ms，避免API请求过于频繁
+        await new Promise(resolve => setTimeout(resolve, 500));
       }
       
       console.log(`历史区块处理完成，共处理 ${processedCount} 个区块`);
@@ -460,8 +470,9 @@ class BSCHandler extends EventEmitter {
   /**
    * 处理单个区块
    * @param {number} blockNumber - 要处理的区块号
+   * @param {number} retryCount - 重试计数，默认为0
    */
-  async processBlockByNumber(blockNumber) {
+  async processBlockByNumber(blockNumber, retryCount = 0) {
     try {
       // 使用轻量级方式获取区块信息，不包含详细交易
       const blockHeader = await this.web3.eth.getBlock(blockNumber, false);
@@ -477,11 +488,24 @@ class BSCHandler extends EventEmitter {
       if (receipts && receipts.length > 0) {
         console.log(`在区块 ${blockNumber} 中找到 ${receipts.length} 笔相关交易`);
         for (const receipt of receipts) {
-          await this.processTransactionReceipt(receipt, blockHeader.timestamp);
+          try {
+            await this.processTransactionReceipt(receipt, blockHeader.timestamp);
+          } catch (receiptError) {
+            console.error(`处理区块 ${blockNumber} 中的交易 ${receipt.transactionHash} 时出错:`, receiptError);
+            // 继续处理下一笔交易，不让一笔交易的错误影响整个区块处理
+          }
         }
       }
     } catch (error) {
       console.error(`处理区块 ${blockNumber} 时出错:`, error);
+      
+      // 检查是否为速率限制错误
+      if (error.message && error.message.includes('Rate limit reached') && retryCount < 3) {
+        const waitTime = (retryCount + 1) * 5000; // 递增等待时间: 5秒, 10秒, 15秒
+        console.log(`遇到速率限制，将在 ${waitTime/1000} 秒后重试区块 ${blockNumber}，这是第 ${retryCount + 1} 次重试...`);
+        await new Promise(resolve => setTimeout(resolve, waitTime));
+        return this.processBlockByNumber(blockNumber, retryCount + 1);
+      }
     }
   }
   
@@ -619,7 +643,8 @@ class BSCHandler extends EventEmitter {
       const [feePercentage, maxAmount, minAmount, dailyLimit, dailyTotal, isPaused] = await Promise.all([
         this.magBridge.methods.feePercentage().call(),
         this.magBridge.methods.maxTransactionAmount().call(),
-        this.magBridge.methods.minTransactionAmount().call(),        this.magBridge.methods.dailyTransactionLimit().call(),
+        this.magBridge.methods.minTransactionAmount().call(),
+        this.magBridge.methods.dailyTransactionLimit().call(),
         this.magBridge.methods.dailyTransactionTotal().call(),
         this.magBridge.methods.paused().call()
       ]);
