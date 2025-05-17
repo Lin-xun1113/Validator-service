@@ -64,16 +64,6 @@ const MAGBridgeABI = [
     "stateMutability": "view",
     "type": "function"
   },
-  // 最小交易额
-  {
-    "inputs": [],
-    "name": "minTransactionAmount",
-    "outputs": [
-      { "internalType": "uint256", "name": "", "type": "uint256" }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
   // 每日交易限额
   {
     "inputs": [],
@@ -168,10 +158,6 @@ class BSCHandler extends EventEmitter {
       const currentBlock = await this.web3.eth.getBlockNumber();
       console.log(`当前BSC链区块高度: ${currentBlock}`);
       
-      // 添加事件缓存以替代getPastEvents功能
-      this.eventCache = [];
-      console.log('已初始化事件缓存，用于替代getPastEvents功能');
-      
       // 不再使用事件订阅，完全依赖区块轮询
       // 启动区块轮询
       this.startBlockPolling(currentBlock);
@@ -253,35 +239,59 @@ class BSCHandler extends EventEmitter {
         return true;
       }
       
-      // 使用随机延迟和合约状态检查来替代事件查询
-      // 这有助于避免多个验证者同时处理同一笔交易
+      // 检查最近的交易，看是否其他验证者最近确认了这笔交易
+      // 这对无共享数据库情况下非常重要
       try {
-        console.log(`无法使用getPastEvents，采用替代方案检查交易状态...`);
+        const latestBlockNumber = await this.web3.eth.getBlockNumber();
+        const blocksToCheck = 100; // 检查最近100个区块
+        const startBlock = Math.max(0, latestBlockNumber - blocksToCheck);
         
-        // 添加随机延迟减少冲突
-        const randomDelay = Math.floor(Math.random() * 5000) + 1000; // 1-6秒随机延迟
-        console.log(`添加${randomDelay/1000}秒随机延迟以减少验证者冲突`);
-        await new Promise(resolve => setTimeout(resolve, randomDelay));
+        console.log(`检查最近的区块事件，从 ${startBlock} 到 ${latestBlockNumber}...`);
         
-        // 再次检查合约状态，确保延迟期间没有其他验证者处理
-        const isProcessedAfterDelay = await this.magBridge.methods.processedTransactions(txHashBytes32).call();
-        if (isProcessedAfterDelay) {
-          console.log(`延迟期间存款 ${deposit.txHash} 已被其他验证者处理`);
+        // 这里假设合约中有TransactionConfirmed事件
+        // 如果合约中没有该事件，可以根据实际情况修改
+        const recentEvents = await this.magBridge.getPastEvents('allEvents', {
+          fromBlock: startBlock,
+          toBlock: 'latest'
+        });
+        
+        // 过滤出与当前存款相关的事件
+        const relevantEvents = recentEvents.filter(event => {
+          // 检查事件中的参数是否包含当前存款的哈希
+          if (event.returnValues && event.event !== 'allEvents') {
+            // 简单地过滤出可能与当前交易相关的事件
+            // 可以使用JSON.stringify检查事件中是否包含交易哈希
+            const eventString = JSON.stringify(event.returnValues);
+            return eventString.includes(txHashBytes32) || 
+                   eventString.includes(deposit.txHash.replace('0x', '')) || 
+                   eventString.includes(deposit.txHash);
+          }
+          return false;
+        });
+        
+        if (relevantEvents.length > 0) {
+          console.log(`发现 ${relevantEvents.length} 个与当前存款相关的事件`);
           
-          // 更新数据库状态
-          db.addProcessedDeposit({
-            magTxHash: deposit.txHash,
-            bscTxHash: '', // 不知道具体哪个交易处理的
-            timestamp: Math.floor(Date.now() / 1000),
-            note: `由其他验证者确认（延迟检测）`
-          });
-          
-          return true;
+          // 检查是否有成功的确认交易
+          for (const event of relevantEvents) {
+            console.log(`发现相关交易: ${event.event}, txHash: ${event.transactionHash}`);
+            
+            // 更新数据库状态
+            db.addProcessedDeposit({
+              magTxHash: deposit.txHash,
+              bscTxHash: event.transactionHash,
+              timestamp: Math.floor(Date.now() / 1000),
+              note: `由其他验证者确认`
+            });
+            
+            console.log(`存款 ${deposit.txHash} 已被其他验证者处理，跳过`);
+            return true;
+          }
+        } else {
+          console.log(`没有发现相关的交易事件，继续处理`);
         }
-        
-        console.log(`没有发现其他验证者处理此交易，继续处理`);
-      } catch (stateCheckError) {
-        console.warn(`检查交易状态失败: ${stateCheckError.message}，继续处理`);
+      } catch (eventError) {
+        console.warn(`检查最近交易事件失败: ${eventError.message}，继续处理`);
       }
       
       // 获取限额信息
@@ -343,21 +353,19 @@ class BSCHandler extends EventEmitter {
     }
   }
   
-  // 区块轮询（主要方法，不再依赖事件订阅和getPastEvents）
+  // 区块轮询（备用方法）
   async startBlockPolling(startBlock) {
     // 存储最后检查的区块号
     this.lastCheckedBlock = startBlock || await this.web3.eth.getBlockNumber() - 10;
     console.log(`从BSC区块 ${this.lastCheckedBlock} 开始轮询`);
     
     // 创建事件主题哈希，用于后续匹配
-    this.withdrawEventTopic = this.web3.utils.sha3('CrossChainWithdraw(address,string,uint256)');
-    this.transferEventTopic = this.web3.utils.sha3('CrossChainTransfer(address,address,uint256,uint256,bytes32,string)');
+    // 与合约中定义的事件结构完全匹配
+    this.withdrawEventTopic = this.web3.utils.sha3('CrossChainWithdraw(address,string,uint256,uint256,uint256,string)');
+    this.transferEventTopic = this.web3.utils.sha3('CrossChainTransfer(address,address,uint256,uint256,uint256,bytes32,uint256,string)');
+    console.log('事件哈希设置完成，监听提款事件主题:', this.withdrawEventTopic);
     
     // 开始定时轮询
-    console.log('启动增强型区块轮询，缓存事件数据以替代getPastEvents功能');
-    // 添加本地事件缓存
-    this.eventCache = [];
-    
     setInterval(async () => {
       try {
         const currentBlock = await this.web3.eth.getBlockNumber();
@@ -385,13 +393,9 @@ class BSCHandler extends EventEmitter {
                 
                 if (receipts && receipts.length > 0) {
                   for (const receipt of receipts) {
-            // 处理交易收据并将事件添加到缓存
-            const events = await this.processTransactionReceipt(receipt, blockHeader.timestamp);
-            if (events && events.length > 0) {
-              this.eventCache.push(...events);
-            }
-          }
-        }
+                    await this.processTransactionReceipt(receipt, blockHeader.timestamp);
+                  }
+                }
               } catch (receiptsError) {
                 console.error(`获取区块 ${blockNumber} 收据时出错:`, receiptsError);
               }
@@ -407,23 +411,6 @@ class BSCHandler extends EventEmitter {
         console.error('BSC区块轮询错误:', error);
       }
     }, 15000); // 每15秒检查一次
-    
-    // 每30秒清理一次缓存
-    setInterval(async () => {
-      try {
-        // 清理过旧的缓存数据
-        // 只保留最近200个区块的事件，以防内存占用过多
-        if (this.eventCache && this.eventCache.length > 0) {
-          const currentBlock = await this.web3.eth.getBlockNumber();
-          this.eventCache = this.eventCache.filter(event => {
-            return currentBlock - event.blockNumber < 200;
-          });
-          console.log(`清理事件缓存，当前缓存事件数量: ${this.eventCache.length}`);
-        }
-      } catch (cacheError) {
-        console.error('清理事件缓存时出错:', cacheError);
-      }
-    }, 30000); // 每30秒清理一次缓存
   }
   
   
@@ -460,9 +447,7 @@ class BSCHandler extends EventEmitter {
   
   // 处理交易收据
   async processTransactionReceipt(receipt, blockTimestamp) {
-    if (!receipt || !receipt.logs) return [];
-    
-    const processedEvents = [];
+    if (!receipt || !receipt.logs) return;
     
     // 遍历所有日志，查找我们感兴趣的事件
     for (const log of receipt.logs) {
@@ -470,44 +455,44 @@ class BSCHandler extends EventEmitter {
         // 检查是否为提款事件
         if (log.topics[0] === this.withdrawEventTopic) {
           await this.processWithdrawEventLog(log, receipt, blockTimestamp);
-          processedEvents.push({
-            event: 'CrossChainWithdraw',
-            transactionHash: receipt.transactionHash,
-            blockNumber: receipt.blockNumber,
-            log: log
-          });
         }
         // 检查是否为转账事件
         else if (log.topics[0] === this.transferEventTopic) {
           await this.processTransferEventLog(log, receipt, blockTimestamp);
-          processedEvents.push({
-            event: 'CrossChainTransfer',
-            transactionHash: receipt.transactionHash,
-            blockNumber: receipt.blockNumber,
-            log: log
-          });
         }
       }
     }
-    
-    return processedEvents;
   }
   
   // 处理提款事件日志
   async processWithdrawEventLog(log, receipt, timestamp) {
     try {
-      // 解码日志数据
-      const sender = this.web3.eth.abi.decodeParameter('address', log.topics[1]);
-      const data = this.web3.eth.abi.decodeParameters(['string', 'uint256'], log.data);
-      const magnetAddress = data[0];
-      const amount = data[1];
+      // 解码日志数据 - 从topics中获取indexed参数
+      const from = this.web3.eth.abi.decodeParameter('address', log.topics[1]);
       
-      // 构造事件对象，类似于web3.js的事件格式
+      // 从data中解码非indexed参数
+      const data = this.web3.eth.abi.decodeParameters(
+        ['string', 'uint256', 'uint256', 'uint256', 'string'], 
+        log.data
+      );
+      
+      const destinationAddress = data[0];
+      const amount = data[1];
+      const fee = data[2];
+      const eventTimestamp = data[3]; 
+      const status = data[4];
+      
+      console.log(`检测到提款事件: 交易=${receipt.transactionHash}, 用户=${from}, 目标地址=${destinationAddress}, 金额=${this.web3.utils.fromWei(amount)} MAG`);
+      
+      // 构造事件对象，类似于web3.js的事件格式，确保字段名与handleWithdrawEvent函数中期望的一致
       const event = {
         returnValues: {
-          sender: sender,
-          magnetAddress: magnetAddress,
-          amount: amount
+          from: from,
+          destinationAddress: destinationAddress,
+          amount: amount,
+          fee: fee,
+          timestamp: eventTimestamp,
+          status: status
         },
         transactionHash: receipt.transactionHash,
         blockNumber: receipt.blockNumber ? receipt.blockNumber.toString() : '0'
@@ -562,8 +547,7 @@ class BSCHandler extends EventEmitter {
       const [feePercentage, maxAmount, minAmount, dailyLimit, dailyTotal, isPaused] = await Promise.all([
         this.magBridge.methods.feePercentage().call(),
         this.magBridge.methods.maxTransactionAmount().call(),
-        this.magBridge.methods.minTransactionAmount().call(),
-        this.magBridge.methods.dailyTransactionLimit().call(),
+        this.magBridge.methods.minTransactionAmount().call(),        this.magBridge.methods.dailyTransactionLimit().call(),
         this.magBridge.methods.dailyTransactionTotal().call(),
         this.magBridge.methods.paused().call()
       ]);
