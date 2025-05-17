@@ -162,7 +162,7 @@ class BSCHandler extends EventEmitter {
    * @param {boolean} scanPastBlocks - 是否扫描过去的区块，默认为true
    * @param {number} blocksToScan - 要扫描的过去区块数，默认为100
    */
-  async start(scanPastBlocks = true, blocksToScan = 60) {
+  async start(scanPastBlocks = true, blocksToScan = 100) {
     try {
       console.log('启动BSC链监听...');
       
@@ -329,9 +329,20 @@ class BSCHandler extends EventEmitter {
         return false;
       }
       
+      // 打印存款详细信息以进行调试
+      console.log('存款详细信息:', JSON.stringify(deposit, null, 2));
+      
       // 准备交易数据
-      const recipient = deposit.from; // 接收者与发送者相同，也可以自定义映射
-      const amount = deposit.value; // 金额与存款相同
+      const recipient = deposit.from; // 接收者与发送者相同
+      
+      // 获取存款金额 - 使用value字段（MAG是原生代币）
+      if (!deposit.value || this.web3.utils.toBN(deposit.value).lte(this.web3.utils.toBN('0'))) {
+        console.error('警告: 存款交易没有有效的金额');
+        return false;
+      }
+      
+      const amount = deposit.value;
+      console.log(`存款金额: ${this.web3.utils.fromWei(amount, 'ether')} MAG`);
       
       // 检查验证者是否有足够的BSC余额来支付Gas
       if (this.account) {
@@ -399,9 +410,9 @@ class BSCHandler extends EventEmitter {
         const currentBlock = await this.web3.eth.getBlockNumber();
         
         if (currentBlock > this.lastCheckedBlock) {
-          // 计算要处理的区块范围，一次最多处理20个区块(以减少常规轮询的负荷)
+          // 计算要处理的区块范围，一次最多处理5个区块(以减少常规轮询的负荷)
           const fromBlock = this.lastCheckedBlock + 1;
-          const toBlock = Math.min(currentBlock, fromBlock + 19);
+          const toBlock = Math.min(currentBlock, fromBlock + 4);
           console.log(`检查BSC区块 ${fromBlock} 到 ${toBlock} 的事件`);
           
           // 逐个处理区块
@@ -425,8 +436,8 @@ class BSCHandler extends EventEmitter {
    */
   async processHistoricalBlocks(fromBlock, toBlock) {
     try {
-      // 分批处理，每批大幅减小到30个区块，以防止速率限制
-      const batchSize = 30;
+      // 分批处理，每批大幅减小到10个区块，以防止速率限制
+      const batchSize = 10;
       let processedCount = 0;
       
       for (let start = fromBlock; start <= toBlock; start += batchSize) {
