@@ -508,6 +508,12 @@ class MagnetMonitor extends EventEmitter {
         console.log(`存款交易 ${tx.hash} 状态异常，请手动检查`);
         return;
       }
+
+      // 检查是否是多签钱包交易（而不是真正的存款）
+      if (this.isMultiSigTransaction(txDetails)) {
+        console.log(`交易 ${tx.hash} 被识别为多签钱包交易，不作为存款处理`);
+        return;
+      }
       
       // 获取区块时间戳
       const block = await this.web3.eth.getBlock(blockNumber);
@@ -528,6 +534,35 @@ class MagnetMonitor extends EventEmitter {
     } catch (error) {
       console.error('处理待确认存款失败:', error);
     }
+  }
+
+  /**
+   * 判断是否是多签钱包交易
+   * @param {Object} tx 交易详情
+   * @returns {boolean} 是否是多签钱包交易
+   */
+  isMultiSigTransaction(tx) {
+    // 检查input数据是否存在且长度大于0（普通转账input数据为0x）
+    if (!tx.input || tx.input === '0x') {
+      return false;
+    }
+    
+    // 检查函数签名（前8个字符）
+    // 多签钱包的函数签名：
+    // submitTransaction: 0xc6427474
+    // confirmTransaction: 0xc01a8c84
+    // executeTransaction: 0xee22610b
+    const functionSignature = tx.input.slice(0, 10).toLowerCase();
+    const multiSigSignatures = ['0xc6427474', '0xc01a8c84', '0xee22610b'];
+    
+    if (multiSigSignatures.includes(functionSignature)) {
+      return true;
+    }
+    
+    // 如果有必要，还可以检查是否是已知验证者的交易
+    // 此处可以增加检查tx.from是否在已知验证者列表中的逻辑
+    
+    return false;
   }
   
   // 定期检查待处理存款
