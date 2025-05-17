@@ -162,7 +162,7 @@ class BSCHandler extends EventEmitter {
    * @param {boolean} scanPastBlocks - 是否扫描过去的区块，默认为true
    * @param {number} blocksToScan - 要扫描的过去区块数，默认为100
    */
-  async start(scanPastBlocks = true, blocksToScan = 100) {
+  async start(scanPastBlocks = true, blocksToScan = 300) {
     try {
       console.log('启动BSC链监听...');
       
