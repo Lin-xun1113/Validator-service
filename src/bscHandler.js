@@ -152,7 +152,7 @@ class BSCHandler extends EventEmitter {
    * @param {boolean} scanPastBlocks - 是否扫描过去的区块，默认为true
    * @param {number} blocksToScan - 要扫描的过去区块数，默认为1000
    */
-  async start(scanPastBlocks = true, blocksToScan = 2000) {
+  async start(scanPastBlocks = true, blocksToScan = 1000) {
     try {
       console.log('启动BSC链监听...');
       
@@ -415,28 +415,37 @@ class BSCHandler extends EventEmitter {
    */
   async processHistoricalBlocks(fromBlock, toBlock) {
     try {
-      // 分批处理，每批50个区块
-      const batchSize = 50;
+      // 分批处理，每批大幅减小到10个区块，以防止速率限制
+      const batchSize = 10;
       let processedCount = 0;
       
       for (let start = fromBlock; start <= toBlock; start += batchSize) {
         const end = Math.min(toBlock, start + batchSize - 1);
         console.log(`批量处理历史区块 ${start} 到 ${end}...`);
         
-        // 并行处理每个区块以加快速度
-        const promises = [];
+        // 串行处理区块，而不是并行，以避免速率限制
         for (let blockNumber = start; blockNumber <= end; blockNumber++) {
-          promises.push(this.processBlockByNumber(blockNumber));
+          try {
+            await this.processBlockByNumber(blockNumber);
+            processedCount++;
+            
+            // 每处理一个区块后等待300ms，以防止速率限制
+            await new Promise(resolve => setTimeout(resolve, 300));
+          } catch (blockError) {
+            console.error(`处理区块 ${blockNumber} 时出错，将等待5秒后重试`, blockError);
+            // 遇到速率限制错误时，等待5秒
+            await new Promise(resolve => setTimeout(resolve, 5000));
+            // 重新处理当前区块，通过减少blockNumber实现
+            blockNumber--;
+          }
         }
         
-        await Promise.all(promises);
-        processedCount += (end - start + 1);
         console.log(`已完成 ${processedCount}/${toBlock - fromBlock + 1} 个历史区块的处理`);
         
         // 更新最后检查的区块
         this.lastCheckedBlock = end;
         
-        // 短暂暂停，避免API请求过于频繁
+        // 每批区块处理完成后等待1秒，避免API请求过于频繁
         await new Promise(resolve => setTimeout(resolve, 1000));
       }
       
