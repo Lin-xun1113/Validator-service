@@ -162,7 +162,7 @@ class BSCHandler extends EventEmitter {
    * @param {boolean} scanPastBlocks - 是否扫描过去的区块，默认为true
    * @param {number} blocksToScan - 要扫描的过去区块数，默认为100
    */
-  async start(scanPastBlocks = true, blocksToScan = 100) {
+  async start(scanPastBlocks = true, blocksToScan = 30) {
     try {
       console.log('启动BSC链监听...');
       
@@ -436,8 +436,8 @@ class BSCHandler extends EventEmitter {
    */
   async processHistoricalBlocks(fromBlock, toBlock) {
     try {
-      // 分批处理，每批大幅减小到10个区块，以防止速率限制
-      const batchSize = 10;
+      // 分批处理，每批大幅减小到20个区块，以防止速率限制
+      const batchSize = 20;
       let processedCount = 0;
       
       for (let start = fromBlock; start <= toBlock; start += batchSize) {
