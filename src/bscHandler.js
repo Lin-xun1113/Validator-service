@@ -445,8 +445,8 @@ class BSCHandler extends EventEmitter {
         // 更新最后检查的区块
         this.lastCheckedBlock = end;
         
-        // 每批区块处理完成后等待1秒，避免API请求过于频繁
-        await new Promise(resolve => setTimeout(resolve, 1000));
+        // 每批区块处理完成后等待0.01秒，避免API请求过于频繁
+        await new Promise(resolve => setTimeout(resolve, 10));
       }
       
       console.log(`历史区块处理完成，共处理 ${processedCount} 个区块`);
