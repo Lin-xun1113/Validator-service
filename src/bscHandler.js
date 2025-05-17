@@ -410,9 +410,9 @@ class BSCHandler extends EventEmitter {
         const currentBlock = await this.web3.eth.getBlockNumber();
         
         if (currentBlock > this.lastCheckedBlock) {
-          // 计算要处理的区块范围，一次最多处理5个区块(以减少常规轮询的负荷)
+          // 计算要处理的区块范围，一次最多处理20个区块(以减少常规轮询的负荷)
           const fromBlock = this.lastCheckedBlock + 1;
-          const toBlock = Math.min(currentBlock, fromBlock + 4);
+          const toBlock = Math.min(currentBlock, fromBlock + 19);
           console.log(`检查BSC区块 ${fromBlock} 到 ${toBlock} 的事件`);
           
           // 逐个处理区块
