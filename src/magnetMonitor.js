@@ -444,21 +444,23 @@ class MagnetMonitor extends EventEmitter {
   
   // 区块轮询（如果节点不支持websocket）
   async startBlockPolling(startBlock) {
-    let lastCheckedBlock = startBlock;
+    // 使用类成员变量而不是局部变量，避免重复检查相同区块
+    this.lastCheckedMagnetBlock = startBlock;
+    console.log(`从 Magnet 区块 ${this.lastCheckedMagnetBlock} 开始轮询`);
     
     setInterval(async () => {
       try {
         const currentBlock = await this.web3.eth.getBlockNumber();
         
-        if (currentBlock > lastCheckedBlock) {
-          console.log(`检查Magnet区块 ${lastCheckedBlock + 1} 到 ${currentBlock}`);
+        if (currentBlock > this.lastCheckedMagnetBlock) {
+          console.log(`检查Magnet区块 ${this.lastCheckedMagnetBlock + 1} 到 ${currentBlock}`);
           
           // 检查区块范围内的交易
-          for (let i = lastCheckedBlock + 1; i <= currentBlock; i++) {
+          for (let i = this.lastCheckedMagnetBlock + 1; i <= currentBlock; i++) {
             await this.checkBlock(i);
           }
           
-          lastCheckedBlock = currentBlock;
+          this.lastCheckedMagnetBlock = currentBlock;
         }
       } catch (error) {
         console.error('Magnet区块轮询错误:', error);
