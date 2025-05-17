@@ -97,7 +97,9 @@ class MagnetMonitor extends EventEmitter {
     }
     
     try {
-      console.log(`处理提款请求: ${withdrawal.from} 请求提取 ${withdrawal.amount} MAG 到 ${withdrawal.destinationAddress}`);
+      // 将金额转换为可读格式后显示（但变量仍保持Wei单位）
+      const readableAmount = this.web3.utils.fromWei(withdrawal.amount, 'ether');
+      console.log(`处理提款请求: ${withdrawal.from} 请求提取 ${readableAmount} MAG 到 ${withdrawal.destinationAddress}`);
       
       // 检查提款请求是否已在本地处理
       if (db.isProcessedWithdrawal(withdrawal.txHash)) {
@@ -114,8 +116,8 @@ class MagnetMonitor extends EventEmitter {
         return false;
       }
       
-      // 将金额转换为Wei
-      const withdrawalAmount = this.web3.utils.toWei(withdrawal.amount, 'ether');
+      // 直接使用原始Wei金额，不再进行转换（因为从BSC事件接收的金额已经是Wei格式）
+      const withdrawalAmount = withdrawal.amount;
       
       // 先检查多签钱包中是否已有该交易并已执行
       // 仅检查最近20个交易，提高效率
@@ -138,8 +140,12 @@ class MagnetMonitor extends EventEmitter {
       
       // 检查多签钱包余额是否足够
       const walletBalance = await this.web3.eth.getBalance(config.magnet.multiSigAddress);
+      
+      // 比较余额（使用Wei单位进行实际比较）
       if (this.web3.utils.toBN(walletBalance).lt(this.web3.utils.toBN(withdrawalAmount))) {
-        console.error(`多签钱包余额不足: ${this.web3.utils.fromWei(walletBalance, 'ether')} MAG < ${withdrawal.amount} MAG`);
+        // 显示时转换为可读格式
+        const readableWalletBalance = this.web3.utils.fromWei(walletBalance, 'ether');
+        console.error(`多签钱包余额不足: ${readableWalletBalance} MAG < ${readableAmount} MAG`);
         return false;
       }
       
