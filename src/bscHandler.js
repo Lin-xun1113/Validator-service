@@ -149,8 +149,10 @@ class BSCHandler extends EventEmitter {
   
   /**
    * 启动BSC链监听
+   * @param {boolean} scanPastBlocks - 是否扫描过去的区块，默认为true
+   * @param {number} blocksToScan - 要扫描的过去区块数，默认为1000
    */
-  async start() {
+  async start(scanPastBlocks = true, blocksToScan = 2000) {
     try {
       console.log('启动BSC链监听...');
       
@@ -158,9 +160,15 @@ class BSCHandler extends EventEmitter {
       const currentBlock = await this.web3.eth.getBlockNumber();
       console.log(`当前BSC链区块高度: ${currentBlock}`);
       
-      // 不再使用事件订阅，完全依赖区块轮询
-      // 启动区块轮询
-      this.startBlockPolling(currentBlock);
+      // 如果需要扫描过去的区块
+      let startBlock = currentBlock;
+      if (scanPastBlocks) {
+        startBlock = Math.max(0, currentBlock - blocksToScan);
+        console.log(`将检索过去 ${blocksToScan} 个区块 (${startBlock} 到 ${currentBlock})的事件...`);
+      }
+      
+      // 启动区块轮询，从指定区块开始
+      this.startBlockPolling(startBlock);
       
       console.log('BSC链监听服务已成功启动');
       return true;
@@ -353,7 +361,10 @@ class BSCHandler extends EventEmitter {
     }
   }
   
-  // 区块轮询（备用方法）
+  /**
+   * 启动区块轮询处理
+   * @param {number} startBlock - 开始轮询的区块号
+   */
   async startBlockPolling(startBlock) {
     // 存储最后检查的区块号
     this.lastCheckedBlock = startBlock || await this.web3.eth.getBlockNumber() - 10;
@@ -365,43 +376,27 @@ class BSCHandler extends EventEmitter {
     this.transferEventTopic = this.web3.utils.sha3('CrossChainTransfer(address,address,uint256,uint256,uint256,bytes32,uint256,string)');
     console.log('事件哈希设置完成，监听提款事件主题:', this.withdrawEventTopic);
     
-    // 开始定时轮询
+    // 首先检查是否需要处理历史区块（大批量处理）
+    const currentBlock = await this.web3.eth.getBlockNumber();
+    if (currentBlock - this.lastCheckedBlock > 50) {
+      console.log(`检测到大量历史区块需要处理: ${this.lastCheckedBlock} 到 ${currentBlock}`);
+      await this.processHistoricalBlocks(this.lastCheckedBlock, currentBlock);
+    }
+    
+    // 开始定时轮询新区块
     setInterval(async () => {
       try {
         const currentBlock = await this.web3.eth.getBlockNumber();
         
         if (currentBlock > this.lastCheckedBlock) {
-          // 计算要处理的区块范围，一次最多处理5个区块(以减少负荷)
+          // 计算要处理的区块范围，一次最多处理5个区块(以减少常规轮询的负荷)
           const fromBlock = this.lastCheckedBlock + 1;
           const toBlock = Math.min(currentBlock, fromBlock + 4);
           console.log(`检查BSC区块 ${fromBlock} 到 ${toBlock} 的事件`);
           
           // 逐个处理区块
           for (let blockNumber = fromBlock; blockNumber <= toBlock; blockNumber++) {
-            try {
-              // 使用轻量级方式获取区块信息，不包含详细交易
-              const blockHeader = await this.web3.eth.getBlock(blockNumber, false);
-              
-              if (!blockHeader) {
-                console.log(`区块 ${blockNumber} 不存在或没有被知同`);
-                continue;
-              }
-              
-              // 获取与我们合约相关的交易收据(按合约地址过滤)
-              try {
-                const receipts = await this.getContractTransactionReceipts(blockNumber);
-                
-                if (receipts && receipts.length > 0) {
-                  for (const receipt of receipts) {
-                    await this.processTransactionReceipt(receipt, blockHeader.timestamp);
-                  }
-                }
-              } catch (receiptsError) {
-                console.error(`获取区块 ${blockNumber} 收据时出错:`, receiptsError);
-              }
-            } catch (blockError) {
-              console.error(`处理区块 ${blockNumber} 时出错:`, blockError);
-            }
+            await this.processBlockByNumber(blockNumber);
           }
           
           // 更新最后检查的区块
@@ -411,6 +406,74 @@ class BSCHandler extends EventEmitter {
         console.error('BSC区块轮询错误:', error);
       }
     }, 15000); // 每15秒检查一次
+  }
+  
+  /**
+   * 处理历史区块 - 针对大量区块的批量处理
+   * @param {number} fromBlock - 起始区块
+   * @param {number} toBlock - 结束区块
+   */
+  async processHistoricalBlocks(fromBlock, toBlock) {
+    try {
+      // 分批处理，每批50个区块
+      const batchSize = 50;
+      let processedCount = 0;
+      
+      for (let start = fromBlock; start <= toBlock; start += batchSize) {
+        const end = Math.min(toBlock, start + batchSize - 1);
+        console.log(`批量处理历史区块 ${start} 到 ${end}...`);
+        
+        // 并行处理每个区块以加快速度
+        const promises = [];
+        for (let blockNumber = start; blockNumber <= end; blockNumber++) {
+          promises.push(this.processBlockByNumber(blockNumber));
+        }
+        
+        await Promise.all(promises);
+        processedCount += (end - start + 1);
+        console.log(`已完成 ${processedCount}/${toBlock - fromBlock + 1} 个历史区块的处理`);
+        
+        // 更新最后检查的区块
+        this.lastCheckedBlock = end;
+        
+        // 短暂暂停，避免API请求过于频繁
+        await new Promise(resolve => setTimeout(resolve, 1000));
+      }
+      
+      console.log(`历史区块处理完成，共处理 ${processedCount} 个区块`);
+    } catch (error) {
+      console.error('处理历史区块时出错:', error);
+      // 出错后，仍然更新lastCheckedBlock，避免重复处理
+      this.lastCheckedBlock = toBlock;
+    }
+  }
+  
+  /**
+   * 处理单个区块
+   * @param {number} blockNumber - 要处理的区块号
+   */
+  async processBlockByNumber(blockNumber) {
+    try {
+      // 使用轻量级方式获取区块信息，不包含详细交易
+      const blockHeader = await this.web3.eth.getBlock(blockNumber, false);
+      
+      if (!blockHeader) {
+        console.log(`区块 ${blockNumber} 不存在或没有被确认`);
+        return;
+      }
+      
+      // 获取与我们合约相关的交易收据(按合约地址过滤)
+      const receipts = await this.getContractTransactionReceipts(blockNumber);
+      
+      if (receipts && receipts.length > 0) {
+        console.log(`在区块 ${blockNumber} 中找到 ${receipts.length} 笔相关交易`);
+        for (const receipt of receipts) {
+          await this.processTransactionReceipt(receipt, blockHeader.timestamp);
+        }
+      }
+    } catch (error) {
+      console.error(`处理区块 ${blockNumber} 时出错:`, error);
+    }
   }
   
   
