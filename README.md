@@ -5,6 +5,13 @@
 
 该验证者服务用于实现 Magnet POW 区块链与 BSC (币安智能链) 之间的安全、可靠的资产跨链转移。除了保证交易可靠性和安全性外，该服务也采用了多重验证机制来防止幺灵攻击和回滚攻击。
 
+## 相关项目
+
+MAG跨链桥生态系统由多个组件组成，您可以访问以下相关项目：
+
+- **[跨链桥前端界面](https://github.com/Lin-xun1113/CrossBridge-Contract/)** - 为用户和管理员提供的Web界面
+- **[跨链桥智能合约](https://github.com/Lin-xun1113/CrossBridge-Contract/)** - 在BSC链上的代币合约与桥接合约，在Magnet链上负责锁定释放资金的多签钱包
+
 ## 主要功能
 
 - **双向跨链支持**: 同时支持 Magnet -> BSC 和 BSC -> Magnet 的资产转移
